@@ -295,7 +295,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         for (d in list) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(Switch(this).apply {
-                text = "${d.name}\n%04X:%04X  id=${d.id}".format(d.vid, d.pid)
+                text = "${d.label}\n%04X:%04X  id=${d.id}".format(d.vid, d.pid)
                 isChecked = prefs.getBoolean("on.${d.key}", false)
                 setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("on.${d.key}", c).apply(); rebuildRouting() }
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -311,7 +311,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             })
             deviceBox.addView(row)
 
-            info.append("${d.name}  VID=%04X PID=%04X  descriptor=${d.src.descriptor}\n".format(d.vid, d.pid))
+            info.append("${d.label}  VID=%04X PID=%04X  descriptor=${d.src.descriptor}\n".format(d.vid, d.pid))
             for (r in d.src.motionRanges) {
                 info.append("  ${MotionEvent.axisToString(r.axis)} min=${r.min} max=${r.max} flat=${r.flat}\n")
             }

@@ -6,12 +6,12 @@ import android.view.InputDevice
 
 /** Saved settings and the list of attached controllers. */
 object Config {
-    class Dev(val key: String, val vid: Int, val pid: Int, val name: String, val id: Int, val src: InputDevice)
+    // key is per physical unit, so identical devices keep separate settings and mappings.
+    class Dev(val key: String, val vid: Int, val pid: Int, val name: String, val id: Int, val src: InputDevice, val label: String)
 
     fun prefs(ctx: Context): SharedPreferences = ctx.getSharedPreferences("cfg", Context.MODE_PRIVATE)
 
-    // Mappings are shared by every unit of the same model.
-    fun mapKey(d: Dev) = "%04x:%04x".format(d.vid, d.pid)
+    fun mapKey(d: Dev) = d.key
 
     fun loadMap(p: SharedPreferences, key: String): HashMap<Int, Mapping> {
         val m = HashMap<Int, Mapping>()
@@ -29,15 +29,20 @@ object Config {
     }
 
     fun devices(): List<Dev> {
-        val counts = HashMap<String, Int>()
-        return InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
+        val sorted = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
             .filter { Mapper.isController(it) }
             .sortedBy { it.id }
-            .map {
-                val base = "%04x:%04x".format(it.vendorId, it.productId)
-                val n = counts.getOrDefault(base, 0)
-                counts[base] = n + 1
-                Dev("$base:$n", it.vendorId, it.productId, it.name, it.id, it)
-            }
+        val total = sorted.groupingBy { it.name }.eachCount()
+        val seenName = HashMap<String, Int>()
+        val seenKey = HashMap<String, Int>()
+        return sorted.map {
+            val num = (seenName[it.name] ?: 0) + 1
+            seenName[it.name] = num
+            val dup = (seenKey[it.descriptor] ?: 0) + 1
+            seenKey[it.descriptor] = dup
+            val key = if (dup == 1) it.descriptor else "${it.descriptor}#$dup"
+            val label = if ((total[it.name] ?: 1) > 1) "${it.name} ($num)" else it.name
+            Dev(key, it.vendorId, it.productId, it.name, it.id, it, label)
+        }
     }
 }

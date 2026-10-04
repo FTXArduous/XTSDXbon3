@@ -99,7 +99,7 @@ class MappingPage(
     fun refresh() {
         devs = Config.devices()
         spinner.adapter = ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item,
-            devs.map { "${it.name}  %04X:%04X  id=${it.id}".format(it.vid, it.pid) })
+            devs.map { "${it.label}  %04X:%04X  id=${it.id}".format(it.vid, it.pid) })
         val idx = devs.indexOfFirst { it.id == devId }.takeIf { it >= 0 } ?: 0
         if (devs.isEmpty()) {
             devId = -1
@@ -118,7 +118,7 @@ class MappingPage(
         map = Config.loadMap(prefs, typeKey)
         learningOut = -1
         baseline = null
-        status.text = "Mapping ${d.name}"
+        status.text = "Mapping ${d.label}"
         updateRows()
     }
 
