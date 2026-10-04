@@ -64,6 +64,51 @@ class Merged(val axes: IntArray, val buttons: Int, val hx: Int, val hy: Int) {
     }
 }
 
+object Outputs {
+    val NAMES = listOf(
+        "A", "B", "X", "Y", "LB", "RB", "Back / View", "Start / Menu", "Guide", "Left stick press", "Right stick press",
+        "D-pad up", "D-pad down", "D-pad left", "D-pad right",
+        "Left stick X", "Left stick Y", "Right stick X", "Right stick Y", "Left trigger", "Right trigger",
+    )
+
+    // HID report bit for outputs 0..10
+    val BIT = intArrayOf(0, 1, 3, 4, 6, 7, 10, 11, 12, 13, 14)
+    const val FIRST_DPAD = 11
+    const val FIRST_AXIS = 15
+}
+
+/** One physical input (axis or key) assigned to one virtual output. */
+class Mapping(val axis: Boolean, val code: Int, val sign: Int, val invert: Boolean) {
+    fun text(): String {
+        val src = if (axis) "Axis ${MotionEvent.axisToString(code).removePrefix("AXIS_")} (${if (sign < 0) "-" else "+"})"
+        else KeyEvent.keyCodeToString(code).removePrefix("KEYCODE_")
+        return if (invert) "$src, inverted" else src
+    }
+
+    fun encode() = "${if (axis) 1 else 0},$code,$sign,${if (invert) 1 else 0}"
+
+    companion object {
+        fun decode(s: String): Mapping? {
+            val f = s.split(',')
+            if (f.size != 4) return null
+            return Mapping(f[0] == "1", f[1].toIntOrNull() ?: return null, f[2].toIntOrNull() ?: return null, f[3] == "1")
+        }
+    }
+}
+
+/** Latest raw values of one physical device, independent of any mapping. */
+class Raw(d: InputDevice) {
+    val axes: IntArray = d.motionRanges.map { it.axis }.filter { it in 0 until 48 }.toIntArray()
+    val min = FloatArray(48)
+    val vals = FloatArray(48)
+    val keys = BooleanArray(512)
+
+    init { for (r in d.motionRanges) if (r.axis in 0 until 48) min[r.axis] = r.min }
+
+    fun update(e: MotionEvent) { for (a in axes) vals[a] = e.getAxisValue(a) }
+    fun key(code: Int, down: Boolean) { if (code in keys.indices) keys[code] = down }
+}
+
 object Mapper {
     // HID button bit positions, laid out so Linux/Android hosts map them to A,B,X,Y,LB,RB,Back,Start,Guide,LS,RS.
     private val KEY_BIT = mapOf(
@@ -80,6 +125,29 @@ object Mapper {
 
     private fun keyBit(code: Int): Int =
         KEY_BIT[code] ?: if (code in KeyEvent.KEYCODE_BUTTON_1..KeyEvent.KEYCODE_BUTTON_11) GENERIC[code - KeyEvent.KEYCODE_BUTTON_1] else -1
+
+    /** Drives the virtual pad purely from the user's assignments for this device. */
+    fun applyCustom(raw: Raw, m: Map<Int, Mapping>, sc: AxisScaler, s: DevState) {
+        s.buttons = 0; s.dpad = 0; s.hatX = 0; s.hatY = 0; s.tl2 = false; s.tr2 = false
+        s.axes.fill(0)
+        for ((out, mp) in m) {
+            val v = if (mp.axis) raw.vals[mp.code] else if (raw.keys[mp.code]) 1f else 0f
+            val on = if (mp.axis) v * mp.sign > 0.5f else v > 0.5f
+            if (out < Outputs.FIRST_DPAD) {
+                if (on) s.buttons = s.buttons or (1 shl Outputs.BIT[out])
+            } else if (out < Outputs.FIRST_AXIS) {
+                if (on) s.dpad = s.dpad or (1 shl (out - Outputs.FIRST_DPAD))
+            } else {
+                val i = out - Outputs.FIRST_AXIS
+                if (i < 4) {
+                    s.axes[i] = sc.scale(if (mp.invert) -v else v)
+                } else {
+                    val t = if (mp.axis && raw.min[mp.code] < 0f) (v + 1f) / 2f else v
+                    s.axes[i] = sc.scaleTrigger(if (mp.invert) 1f - t else t)
+                }
+            }
+        }
+    }
 
     fun applyMotion(e: MotionEvent, s: DevState, sc: AxisScaler) {
         val d = e.device ?: return

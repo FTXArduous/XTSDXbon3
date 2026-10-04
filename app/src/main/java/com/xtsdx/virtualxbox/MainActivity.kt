@@ -37,7 +37,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private val ui = Handler(Looper.getMainLooper())
     private val scaler = AxisScaler()
     private var hidStarted = false
-
+    private lateinit var mainView: ScrollView
+    private lateinit var page: MappingPage
+    private var showingMapping = false
+    private val rawById = HashMap<Int, Raw>()
+    private var customById = HashMap<Int, Map<Int, Mapping>>()
     // Event path uses only these in-memory structures.
     private var route = HashMap<Int, Int>() // device id -> virtual pad slot
     private val stateById = HashMap<Int, DevState>()
@@ -55,6 +59,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                     a[0], a[1], a[2], a[3], a[4], a[5], m.hx, m.hy, m.buttons))
             }
             liveView.text = sb
+            if (showingMapping) page.updateLive(rawById[page.devId])
             ui.postDelayed(this, 200)
         }
     }
@@ -90,6 +95,10 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             }
         })
         root.addView(Button(this).apply { text = "Disconnect"; setOnClickListener { hid.disconnect() } })
+        root.addView(Button(this).apply {
+            text = "Button mapping (Thrustmaster, flight sticks, any controller)"
+            setOnClickListener { page.refresh(); showingMapping = true; setContentView(page.view) }
+        })
         root.addView(label("Paired devices (tap to connect)"))
         pairedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(pairedBox)
@@ -126,7 +135,9 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         infoView = TextView(this).apply { typeface = android.graphics.Typeface.MONOSPACE; textSize = 11f; setPadding(0, dp(12), 0, 0) }
         root.addView(infoView)
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        mainView = ScrollView(this).apply { addView(root) }
+        page = MappingPage(this, prefs, { rawById[it] }, { showMain() }, { rebuildRouting() })
+        setContentView(mainView)
 
         if (btPermitted()) startHid() else requestPermissions(
             arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE), 1)
@@ -176,13 +187,32 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     override fun onInputDeviceRemoved(id: Int) { refreshDevices(); rebuildRouting() }
     override fun onInputDeviceChanged(id: Int) {}
 
+    private fun showMain() {
+        showingMapping = false
+        page.cancel()
+        setContentView(mainView)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (showingMapping) showMain() else super.onBackPressed()
+    }
+
     private fun rebuildRouting() {
         val newRoute = HashMap<Int, Int>()
-        for (d in Config.devices()) {
+        val newCustom = HashMap<Int, Map<Int, Mapping>>()
+        val all = Config.devices()
+        for (d in all) {
             val slot = prefs.getInt("slot.${d.key}", 0)
-            if (prefs.getBoolean("on.${d.key}", false) && padOn(slot)) newRoute[d.id] = slot
+            if (prefs.getBoolean("on.${d.key}", false) && padOn(slot)) {
+                newRoute[d.id] = slot
+                val m = Config.loadMap(prefs, Config.mapKey(d))
+                if (m.isNotEmpty()) newCustom[d.id] = m
+            }
         }
         route = newRoute
+        customById = newCustom
+        rawById.keys.retainAll(all.map { it.id }.toSet())
         stateById.keys.retainAll(newRoute.keys)
         for (id in newRoute.keys) stateById.getOrPut(id) { DevState() }
         for (l in slotStates) l.clear()
@@ -193,25 +223,52 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private fun flush(slot: Int) = hid.send(slot, Mapper.merge(slotStates[slot]).bytes())
 
+    private fun rawFor(d: InputDevice?, id: Int): Raw? {
+        if (d == null) return null
+        return rawById.getOrPut(id) { Raw(d) }
+    }
+
     override fun dispatchGenericMotionEvent(e: MotionEvent): Boolean {
         if (e.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK && e.action == MotionEvent.ACTION_MOVE) {
-            val slot = route[e.deviceId]
-            val s = stateById[e.deviceId]
-            if (slot != null && s != null) {
-                Mapper.applyMotion(e, s, scaler)
-                flush(slot)
-                return true
+            val raw = rawFor(e.device, e.deviceId)
+            if (raw != null) {
+                raw.update(e)
+                if (showingMapping && page.learningOut >= 0 && e.deviceId == page.devId) {
+                    page.offerAxis(raw)
+                    return true
+                }
+                val slot = route[e.deviceId]
+                val s = stateById[e.deviceId]
+                if (slot != null && s != null) {
+                    val custom = customById[e.deviceId]
+                    if (custom != null) Mapper.applyCustom(raw, custom, scaler, s) else Mapper.applyMotion(e, s, scaler)
+                    flush(slot)
+                    return true
+                }
             }
         }
         return super.dispatchGenericMotionEvent(e)
     }
 
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
-        val slot = route[e.deviceId]
-        val s = stateById[e.deviceId]
-        if (slot != null && s != null && Mapper.applyKey(e, s)) {
-            flush(slot)
-            return true
+        val ctrl = InputDevice.SOURCE_GAMEPAD or InputDevice.SOURCE_JOYSTICK
+        val raw = if (e.source and ctrl != 0) rawFor(e.device, e.deviceId) else null
+        if (raw != null) {
+            if (e.action == KeyEvent.ACTION_DOWN) raw.key(e.keyCode, true) else if (e.action == KeyEvent.ACTION_UP) raw.key(e.keyCode, false)
+            if (showingMapping && page.learningOut >= 0 && e.deviceId == page.devId) {
+                if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) page.offerKey(e.keyCode)
+                return true
+            }
+            val slot = route[e.deviceId]
+            val s = stateById[e.deviceId]
+            if (slot != null && s != null) {
+                val custom = customById[e.deviceId]
+                val handled = if (custom != null) { Mapper.applyCustom(raw, custom, scaler, s); true } else Mapper.applyKey(e, s)
+                if (handled) {
+                    flush(slot)
+                    return true
+                }
+            }
         }
         return super.dispatchKeyEvent(e)
     }

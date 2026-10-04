@@ -10,6 +10,24 @@ object Config {
 
     fun prefs(ctx: Context): SharedPreferences = ctx.getSharedPreferences("cfg", Context.MODE_PRIVATE)
 
+    // Mappings are shared by every unit of the same model.
+    fun mapKey(d: Dev) = "%04x:%04x".format(d.vid, d.pid)
+
+    fun loadMap(p: SharedPreferences, key: String): HashMap<Int, Mapping> {
+        val m = HashMap<Int, Mapping>()
+        for (e in (p.getString("map.$key", "") ?: "").split(';')) {
+            val i = e.indexOf(':')
+            if (i <= 0) continue
+            val out = e.substring(0, i).toIntOrNull() ?: continue
+            m[out] = Mapping.decode(e.substring(i + 1)) ?: continue
+        }
+        return m
+    }
+
+    fun saveMap(p: SharedPreferences, key: String, m: Map<Int, Mapping>) {
+        p.edit().putString("map.$key", m.entries.joinToString(";") { "${it.key}:${it.value.encode()}" }).apply()
+    }
+
     fun devices(): List<Dev> {
         val counts = HashMap<String, Int>()
         return InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
