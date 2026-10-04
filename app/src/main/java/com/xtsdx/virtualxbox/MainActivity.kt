@@ -2,17 +2,21 @@ package com.xtsdx.virtualxbox
 
 import android.Manifest
 import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.hardware.input.InputManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
+import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -24,61 +28,76 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var im: InputManager
+    private lateinit var hid: Hid
     private lateinit var statusView: TextView
-    private lateinit var startBtn: Button
+    private lateinit var liveView: TextView
     private lateinit var deviceBox: LinearLayout
+    private lateinit var pairedBox: LinearLayout
     private lateinit var infoView: TextView
     private val ui = Handler(Looper.getMainLooper())
+    private val scaler = AxisScaler()
+    private var hidStarted = false
+
+    // Event path uses only these in-memory structures.
+    private var route = HashMap<Int, Int>() // device id -> virtual pad slot
+    private val stateById = HashMap<Int, DevState>()
+    private val slotStates = Array(4) { ArrayList<DevState>() }
 
     private val tick = object : Runnable {
         override fun run() {
-            statusView.text = "Status: ${Bridge.status}"
-            startBtn.text = if (Bridge.running) "Stop bridge" else "Start bridge (needs root)"
-            ui.postDelayed(this, 1000)
+            statusView.text = "Bluetooth: ${hid.status}"
+            val sb = StringBuilder()
+            for (i in 0 until 4) {
+                if (!padOn(i)) continue
+                val m = Mapper.merge(slotStates[i])
+                val a = m.axes
+                sb.append("P${i + 1} LS %6d %6d  RS %6d %6d  LT %5d RT %5d  hat %d,%d  btn %04X\n".format(
+                    a[0], a[1], a[2], a[3], a[4], a[5], m.hx, m.hy, m.buttons))
+            }
+            liveView.text = sb
+            ui.postDelayed(this, 200)
         }
     }
 
-    private val one get() = Config.one(prefs)
-    private fun padOn(i: Int) = Config.padOn(prefs, i)
-    private fun pushConfig() = Config.push(this)
+    private val one get() = prefs.getBoolean("one", true)
+    private fun padOn(i: Int) = prefs.getBoolean("pad$i", i == 0)
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun label(t: String) = TextView(this).apply { text = t; setPadding(0, dp(12), 0, 0) }
+
+    private fun btPermitted() = Build.VERSION.SDK_INT < 31 ||
+        checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         prefs = getSharedPreferences("cfg", MODE_PRIVATE)
         im = getSystemService(Context.INPUT_SERVICE) as InputManager
-        if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        hid = Hid(applicationContext)
+        scaler.deadzone = prefs.getInt("dz", 5) / 100f
+        scaler.curve = 0.5f + prefs.getInt("curve", 50) / 50f
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(16), dp(16), dp(16)) }
         statusView = TextView(this)
-        startBtn = Button(this).apply {
-            setOnClickListener {
-                if (Bridge.running) {
-                    stopService(Intent(this@MainActivity, BridgeService::class.java))
-                } else {
-                    startForegroundService(Intent(this@MainActivity, BridgeService::class.java))
-                }
-            }
-        }
+        liveView = TextView(this).apply { typeface = android.graphics.Typeface.MONOSPACE; textSize = 11f }
         root.addView(statusView)
-        root.addView(startBtn)
+        root.addView(liveView)
 
-        root.addView(Switch(this).apply {
-            text = "Start automatically on boot"
-            isChecked = prefs.getBoolean("boot", false)
-            setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("boot", c).apply() }
-        })
         root.addView(Button(this).apply {
-            text = "Allow unrestricted battery use (keeps it live)"
+            text = "Make discoverable (pair from the other device)"
             setOnClickListener {
-                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+                startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                    .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300))
             }
         })
+        root.addView(Button(this).apply { text = "Disconnect"; setOnClickListener { hid.disconnect() } })
+        root.addView(label("Paired devices (tap to connect)"))
+        pairedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(pairedBox)
 
         root.addView(Switch(this).apply {
-            text = "Emulate: ON = Xbox One, OFF = Xbox 360"
+            text = "Layout: ON = Xbox One (Android standard), OFF = Xbox 360 (XInput style)"
             isChecked = one
-            setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("one", c).apply(); pushConfig() }
+            setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("one", c).apply(); rebuildRouting() }
         })
 
         root.addView(label("Virtual controllers (up to 4)"))
@@ -86,19 +105,19 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             root.addView(Switch(this).apply {
                 text = "Virtual controller ${i + 1}"
                 isChecked = padOn(i)
-                setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("pad$i", c).apply(); pushConfig() }
+                setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("pad$i", c).apply(); rebuildRouting() }
             })
         }
 
         root.addView(label("Stick curve (left = fine, right = aggressive)"))
         root.addView(SeekBar(this).apply {
             max = 100; progress = prefs.getInt("curve", 50)
-            setOnSeekBarChangeListener(listener { prefs.edit().putInt("curve", it).apply(); pushConfig() })
+            setOnSeekBarChangeListener(listener { prefs.edit().putInt("curve", it).apply(); scaler.curve = 0.5f + it / 50f })
         })
         root.addView(label("Deadzone"))
         root.addView(SeekBar(this).apply {
             max = 50; progress = prefs.getInt("dz", 5)
-            setOnSeekBarChangeListener(listener { prefs.edit().putInt("dz", it).apply(); pushConfig() })
+            setOnSeekBarChangeListener(listener { prefs.edit().putInt("dz", it).apply(); scaler.deadzone = it / 100f })
         })
 
         root.addView(label("Physical devices (switch = use it, button = which virtual controller)"))
@@ -108,7 +127,29 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         root.addView(infoView)
 
         setContentView(ScrollView(this).apply { addView(root) })
+
+        if (btPermitted()) startHid() else requestPermissions(
+            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE), 1)
         refreshDevices()
+        rebuildRouting()
+    }
+
+    private fun startHid() {
+        if (hidStarted) return
+        hidStarted = true
+        hid.start()
+        rebuildRouting()
+        refreshPaired()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (btPermitted()) startHid() else hid.status = "Bluetooth permission denied"
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Deliver controller motion as it arrives instead of once per frame.
+        if (hasFocus && Build.VERSION.SDK_INT >= 31) window.decorView.requestUnbufferedDispatch(InputDevice.SOURCE_JOYSTICK)
     }
 
     override fun onStart() {
@@ -116,6 +157,8 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         im.registerInputDeviceListener(this, null)
         ui.post(tick)
         refreshDevices()
+        rebuildRouting()
+        if (hidStarted) refreshPaired()
     }
 
     override fun onStop() {
@@ -124,11 +167,68 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         ui.removeCallbacks(tick)
     }
 
-    override fun onInputDeviceAdded(id: Int) = refreshDevices()
-    override fun onInputDeviceRemoved(id: Int) = refreshDevices()
+    override fun onDestroy() {
+        super.onDestroy()
+        hid.stop()
+    }
+
+    override fun onInputDeviceAdded(id: Int) { refreshDevices(); rebuildRouting() }
+    override fun onInputDeviceRemoved(id: Int) { refreshDevices(); rebuildRouting() }
     override fun onInputDeviceChanged(id: Int) {}
 
-    private fun label(t: String) = TextView(this).apply { text = t; setPadding(0, dp(12), 0, 0) }
+    private fun rebuildRouting() {
+        val newRoute = HashMap<Int, Int>()
+        for (d in Config.devices()) {
+            val slot = prefs.getInt("slot.${d.key}", 0)
+            if (prefs.getBoolean("on.${d.key}", false) && padOn(slot)) newRoute[d.id] = slot
+        }
+        route = newRoute
+        stateById.keys.retainAll(newRoute.keys)
+        for (id in newRoute.keys) stateById.getOrPut(id) { DevState() }
+        for (l in slotStates) l.clear()
+        for ((id, slot) in newRoute) slotStates[slot].add(stateById.getValue(id))
+        hid.configure((0 until 4).filter { padOn(it) }, one)
+        for (i in 0 until 4) if (padOn(i)) hid.send(i, Mapper.merge(slotStates[i]).bytes())
+    }
+
+    private fun flush(slot: Int) = hid.send(slot, Mapper.merge(slotStates[slot]).bytes())
+
+    override fun dispatchGenericMotionEvent(e: MotionEvent): Boolean {
+        if (e.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK && e.action == MotionEvent.ACTION_MOVE) {
+            val slot = route[e.deviceId]
+            val s = stateById[e.deviceId]
+            if (slot != null && s != null) {
+                Mapper.applyMotion(e, s, scaler)
+                flush(slot)
+                return true
+            }
+        }
+        return super.dispatchGenericMotionEvent(e)
+    }
+
+    override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        val slot = route[e.deviceId]
+        val s = stateById[e.deviceId]
+        if (slot != null && s != null && Mapper.applyKey(e, s)) {
+            flush(slot)
+            return true
+        }
+        return super.dispatchKeyEvent(e)
+    }
+
+    private fun refreshPaired() {
+        pairedBox.removeAllViews()
+        if (!btPermitted()) return
+        val ad = getSystemService(BluetoothManager::class.java)?.adapter ?: return
+        val bonded = ad.bondedDevices.orEmpty()
+        if (bonded.isEmpty()) pairedBox.addView(TextView(this).apply { text = "None yet. Use the discoverable button, then pair from the other device." })
+        for (d in bonded) {
+            pairedBox.addView(Button(this).apply {
+                text = d.name ?: d.address
+                setOnClickListener { hid.connect(d) }
+            })
+        }
+    }
 
     private fun refreshDevices() {
         deviceBox.removeAllViews()
@@ -140,7 +240,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
             row.addView(Switch(this).apply {
                 text = "${d.name}\n%04X:%04X  id=${d.id}".format(d.vid, d.pid)
                 isChecked = prefs.getBoolean("on.${d.key}", false)
-                setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("on.${d.key}", c).apply(); pushConfig() }
+                setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("on.${d.key}", c).apply(); rebuildRouting() }
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             row.addView(Button(this).apply {
@@ -149,7 +249,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
                     val s = (prefs.getInt("slot.${d.key}", 0) + 1) % 4
                     prefs.edit().putInt("slot.${d.key}", s).apply()
                     text = "P${s + 1}"
-                    pushConfig()
+                    rebuildRouting()
                 }
             })
             deviceBox.addView(row)
