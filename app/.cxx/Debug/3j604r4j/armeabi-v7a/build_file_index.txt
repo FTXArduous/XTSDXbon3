@@ -1,1 +1,0 @@
-C:\Users\JeremyBouchey\Documents\XTSDX\app\src\main\cpp\CMakeLists.txt

@@ -1,3 +1,0 @@
-C:/Users/JeremyBouchey/Documents/XTSDX/app/.cxx/RelWithDebInfo/281p5z43/x86_64/CMakeFiles/vxbridge.dir
-C:/Users/JeremyBouchey/Documents/XTSDX/app/.cxx/RelWithDebInfo/281p5z43/x86_64/CMakeFiles/edit_cache.dir
-C:/Users/JeremyBouchey/Documents/XTSDX/app/.cxx/RelWithDebInfo/281p5z43/x86_64/CMakeFiles/rebuild_cache.dir

@@ -5,3 +5,5 @@ build/
 local.properties
 build.log
 .idea/
+.cxx/
+.vscode/
