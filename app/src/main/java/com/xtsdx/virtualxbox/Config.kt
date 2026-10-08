@@ -34,6 +34,21 @@ object Config {
     private fun encodeMap(m: Map<Int, Mapping>) =
         m.entries.joinToString(";") { "${it.key}:${it.value.encode()}" }
 
+    fun saveName(p: SharedPreferences, key: String, name: String) {
+        p.edit().putString("mapname.$key", name).apply()
+    }
+
+    class Saved(val key: String, val title: String, val map: HashMap<Int, Mapping>)
+
+    /** Every non-empty mapping stored on this phone, including ones from controllers that are not connected. */
+    fun savedMaps(p: SharedPreferences): List<Saved> =
+        p.all.keys.filter { it.startsWith("map.") }.mapNotNull { k ->
+            val key = k.removePrefix("map.")
+            val m = loadMap(p, key)
+            if (m.isEmpty()) null
+            else Saved(key, "${p.getString("mapname.$key", null) ?: key} (${m.size} inputs)", m)
+        }.sortedBy { it.title }
+
     fun devices(): List<Dev> {
         val sorted = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }
             .filter { Mapper.isController(it) }

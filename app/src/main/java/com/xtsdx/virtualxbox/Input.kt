@@ -173,11 +173,6 @@ object Mapper {
         val d = e.device ?: return
         fun has(a: Int) = d.getMotionRange(a) != null
         fun v(a: Int) = e.getAxisValue(a)
-        fun trigger(axis: Int): Float {
-            val range = d.getMotionRange(axis) ?: return 0f
-            val span = range.max - range.min
-            return if (span <= 0f) 0f else ((v(axis) - range.min) / span).coerceIn(0f, 1f)
-        }
 
         s.axes[0] = sc.scale(v(MotionEvent.AXIS_X))
         s.axes[1] = sc.scale(v(MotionEvent.AXIS_Y))
@@ -194,8 +189,8 @@ object Mapper {
         }
         s.axes[2] = sc.scale(rx)
         s.axes[3] = sc.scale(ry)
-        s.axes[4] = sc.scaleTrigger(maxOf(trigger(MotionEvent.AXIS_LTRIGGER), trigger(MotionEvent.AXIS_BRAKE)))
-        s.axes[5] = sc.scaleTrigger(maxOf(trigger(MotionEvent.AXIS_RTRIGGER), trigger(MotionEvent.AXIS_GAS)))
+        s.axes[4] = sc.scaleTrigger(maxOf(v(MotionEvent.AXIS_LTRIGGER), v(MotionEvent.AXIS_BRAKE)))
+        s.axes[5] = sc.scaleTrigger(maxOf(v(MotionEvent.AXIS_RTRIGGER), v(MotionEvent.AXIS_GAS)))
         s.hatX = v(MotionEvent.AXIS_HAT_X).roundToInt().coerceIn(-1, 1)
         s.hatY = v(MotionEvent.AXIS_HAT_Y).roundToInt().coerceIn(-1, 1)
     }

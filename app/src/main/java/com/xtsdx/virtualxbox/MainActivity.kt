@@ -260,7 +260,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     override fun dispatchGenericMotionEvent(e: MotionEvent): Boolean {
-        if (e.device?.let(Mapper::isController) == true && e.action == MotionEvent.ACTION_MOVE) {
+        if (e.isFromSource(InputDevice.SOURCE_JOYSTICK) && e.action == MotionEvent.ACTION_MOVE) {
             val raw = rawFor(e.device, e.deviceId)
             if (raw != null) {
                 raw.update(e)

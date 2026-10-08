@@ -60,6 +60,7 @@ class MappingPage(
                     status.text = "Connect and select a controller before saving."
                 } else {
                     status.text = if (Config.commitMap(prefs, typeKey, map)) {
+                        devs.firstOrNull { it.id == devId }?.let { Config.saveName(prefs, typeKey, it.label) }
                         "Mapping saved on this phone for ${devs.firstOrNull { it.id == devId }?.label ?: "this controller"}."
                     } else {
                         "Could not save the mapping on this phone."
@@ -67,6 +68,7 @@ class MappingPage(
                 }
             }
         })
+        root.addView(Button(ctx).apply { text = "Load a saved mapping"; setOnClickListener { loadSaved() } })
         root.addView(live)
 
         for (out in Outputs.NAMES.indices) {
@@ -138,7 +140,24 @@ class MappingPage(
 
     private fun save() {
         Config.saveMap(prefs, typeKey, map)
+        devs.firstOrNull { it.id == devId }?.let { Config.saveName(prefs, typeKey, it.label) }
         onChanged()
+    }
+
+    private fun loadSaved() {
+        if (devId < 0) { status.text = "Connect and select a controller before loading."; return }
+        val saved = Config.savedMaps(prefs)
+        if (saved.isEmpty()) { status.text = "No saved mappings found on this phone."; return }
+        android.app.AlertDialog.Builder(ctx)
+            .setTitle("Load a saved mapping")
+            .setItems(saved.map { it.title }.toTypedArray()) { _, i ->
+                map = HashMap(saved[i].map)
+                save()
+                updateRows()
+                status.text = "Loaded \"${saved[i].title}\" onto the selected controller."
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun updateRows() {
