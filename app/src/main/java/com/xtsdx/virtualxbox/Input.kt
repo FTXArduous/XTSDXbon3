@@ -173,6 +173,8 @@ object Mapper {
         val d = e.device ?: return
         fun has(a: Int) = d.getMotionRange(a) != null
         fun v(a: Int) = e.getAxisValue(a)
+        // Only axes that swing both ways can be sticks; throttle sliders rest at one end and would hold a stick at full tilt.
+        fun centered(a: Int) = d.getMotionRange(a)?.let { it.min < 0f && it.max > 0f } == true
 
         s.axes[0] = sc.scale(v(MotionEvent.AXIS_X))
         s.axes[1] = sc.scale(v(MotionEvent.AXIS_Y))
@@ -181,15 +183,21 @@ object Mapper {
         val hasTriggerAxes = has(MotionEvent.AXIS_LTRIGGER) || has(MotionEvent.AXIS_RTRIGGER) ||
             has(MotionEvent.AXIS_BRAKE) || has(MotionEvent.AXIS_GAS)
         // XInput-style generic pads: Rx/Ry is the right stick and Z/Rz are the triggers, which rest at their minimum.
-        val zTriggers = !hasTriggerAxes && has(MotionEvent.AXIS_RX) && has(MotionEvent.AXIS_RY) &&
+        val zTriggers = !hasTriggerAxes && centered(MotionEvent.AXIS_RX) && centered(MotionEvent.AXIS_RY) &&
             has(MotionEvent.AXIS_Z) && has(MotionEvent.AXIS_RZ)
-        if (zTriggers || (!(has(MotionEvent.AXIS_Z) && has(MotionEvent.AXIS_RZ)) && has(MotionEvent.AXIS_RX) && has(MotionEvent.AXIS_RY))) {
+        if (zTriggers) {
             rx = v(MotionEvent.AXIS_RX); ry = v(MotionEvent.AXIS_RY)
-        } else if (has(MotionEvent.AXIS_Z) && has(MotionEvent.AXIS_RZ)) {
+        } else if (centered(MotionEvent.AXIS_Z) && centered(MotionEvent.AXIS_RZ)) {
             rx = v(MotionEvent.AXIS_Z); ry = v(MotionEvent.AXIS_RZ)
+        } else if (centered(MotionEvent.AXIS_RX) && centered(MotionEvent.AXIS_RY)) {
+            rx = v(MotionEvent.AXIS_RX); ry = v(MotionEvent.AXIS_RY)
         } else {
-            // Flight sticks: twist/rudder is the right stick X. Throttle levers rest at an end, so they are not used as a stick.
-            rx = v(MotionEvent.AXIS_RZ).takeIf { it != 0f } ?: v(MotionEvent.AXIS_RUDDER)
+            // Flight sticks: twist/rudder is the right stick X; throttle is left for the mapping page.
+            rx = when {
+                centered(MotionEvent.AXIS_RZ) -> v(MotionEvent.AXIS_RZ)
+                centered(MotionEvent.AXIS_RUDDER) -> v(MotionEvent.AXIS_RUDDER)
+                else -> 0f
+            }
             ry = 0f
         }
         fun trig(a: Int): Float {
