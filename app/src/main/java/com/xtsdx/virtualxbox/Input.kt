@@ -178,19 +178,34 @@ object Mapper {
         s.axes[1] = sc.scale(v(MotionEvent.AXIS_Y))
         val rx: Float
         val ry: Float
-        if (has(MotionEvent.AXIS_Z) && has(MotionEvent.AXIS_RZ)) {
-            rx = v(MotionEvent.AXIS_Z); ry = v(MotionEvent.AXIS_RZ)
-        } else if (has(MotionEvent.AXIS_RX) && has(MotionEvent.AXIS_RY)) {
+        val hasTriggerAxes = has(MotionEvent.AXIS_LTRIGGER) || has(MotionEvent.AXIS_RTRIGGER) ||
+            has(MotionEvent.AXIS_BRAKE) || has(MotionEvent.AXIS_GAS)
+        // XInput-style generic pads: Rx/Ry is the right stick and Z/Rz are the triggers, which rest at their minimum.
+        val zTriggers = !hasTriggerAxes && has(MotionEvent.AXIS_RX) && has(MotionEvent.AXIS_RY) &&
+            has(MotionEvent.AXIS_Z) && has(MotionEvent.AXIS_RZ)
+        if (zTriggers || (!(has(MotionEvent.AXIS_Z) && has(MotionEvent.AXIS_RZ)) && has(MotionEvent.AXIS_RX) && has(MotionEvent.AXIS_RY))) {
             rx = v(MotionEvent.AXIS_RX); ry = v(MotionEvent.AXIS_RY)
+        } else if (has(MotionEvent.AXIS_Z) && has(MotionEvent.AXIS_RZ)) {
+            rx = v(MotionEvent.AXIS_Z); ry = v(MotionEvent.AXIS_RZ)
         } else {
-            // Flight sticks: twist/rudder and throttle act as the right stick.
+            // Flight sticks: twist/rudder is the right stick X. Throttle levers rest at an end, so they are not used as a stick.
             rx = v(MotionEvent.AXIS_RZ).takeIf { it != 0f } ?: v(MotionEvent.AXIS_RUDDER)
-            ry = v(MotionEvent.AXIS_THROTTLE)
+            ry = 0f
+        }
+        fun trig(a: Int): Float {
+            val r = d.getMotionRange(a) ?: return 0f
+            val span = r.max - r.min
+            return if (span <= 0f) 0f else ((v(a) - r.min) / span).coerceIn(0f, 1f)
         }
         s.axes[2] = sc.scale(rx)
         s.axes[3] = sc.scale(ry)
-        s.axes[4] = sc.scaleTrigger(maxOf(v(MotionEvent.AXIS_LTRIGGER), v(MotionEvent.AXIS_BRAKE)))
-        s.axes[5] = sc.scaleTrigger(maxOf(v(MotionEvent.AXIS_RTRIGGER), v(MotionEvent.AXIS_GAS)))
+        if (zTriggers) {
+            s.axes[4] = sc.scaleTrigger(trig(MotionEvent.AXIS_Z))
+            s.axes[5] = sc.scaleTrigger(trig(MotionEvent.AXIS_RZ))
+        } else {
+            s.axes[4] = sc.scaleTrigger(maxOf(v(MotionEvent.AXIS_LTRIGGER), v(MotionEvent.AXIS_BRAKE)))
+            s.axes[5] = sc.scaleTrigger(maxOf(v(MotionEvent.AXIS_RTRIGGER), v(MotionEvent.AXIS_GAS)))
+        }
         s.hatX = v(MotionEvent.AXIS_HAT_X).roundToInt().coerceIn(-1, 1)
         s.hatY = v(MotionEvent.AXIS_HAT_Y).roundToInt().coerceIn(-1, 1)
     }
