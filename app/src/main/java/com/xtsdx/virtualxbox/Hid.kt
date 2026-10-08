@@ -23,6 +23,7 @@ class Hid(private val ctx: Context) {
     private var pending = false
     private var slots: List<Int> = emptyList()
     private var one = true
+    private var profile = 0
     private val last = arrayOfNulls<ByteArray>(4)
     private val exec = Executors.newSingleThreadExecutor()
 
@@ -83,10 +84,12 @@ class Hid(private val ctx: Context) {
         proxy = null
     }
 
-    fun configure(newSlots: List<Int>, newOne: Boolean) {
-        if (newSlots == slots && newOne == one) return
+    fun configure(newSlots: List<Int>, newOne: Boolean, newProfile: Int) {
+        if (newSlots == slots && newOne == one && newProfile == profile) return
         slots = newSlots
         one = newOne
+        profile = newProfile
+        last.fill(null)
         apply()
     }
 
@@ -101,9 +104,10 @@ class Hid(private val ctx: Context) {
     }
 
     private fun doRegister(p: BluetoothHidDevice) {
+        val ps = profile == PS
         val sdp = BluetoothHidDeviceAppSdpSettings(
-            "Virtual Xbox Controller", "Gamepad", "XTSDX",
-            BluetoothHidDevice.SUBCLASS2_GAMEPAD, descriptor(slots, one),
+            NAMES[profile], "Gamepad", if (ps) "Sony Interactive Entertainment" else "XTSDX",
+            BluetoothHidDevice.SUBCLASS2_GAMEPAD, descriptor(slots, one, ps),
         )
         // 11.25 ms is the lowest latency request the HID QoS record accepts in practice.
         val qos = BluetoothHidDeviceAppQosSettings(
@@ -113,9 +117,10 @@ class Hid(private val ctx: Context) {
         if (!p.registerApp(sdp, null, qos, exec, callback)) status = "Bluetooth HID registration failed"
     }
 
-    fun send(slot: Int, report: ByteArray) {
+    fun send(slot: Int, m: Merged) {
         val h = proxy ?: return
         val d = host ?: return
+        val report = if (profile == PS) m.ds4() else m.bytes()
         if (last[slot]?.contentEquals(report) == true) return
         last[slot] = report
         h.sendReport(d, slot + 1, report)
@@ -125,11 +130,30 @@ class Hid(private val ctx: Context) {
     fun disconnect() { host?.let { proxy?.disconnect(it) } }
 
     companion object {
-        /** One Game Pad collection per slot, report ID = slot + 1, 16-bit axes of +-32256. */
-        fun descriptor(slots: List<Int>, one: Boolean): ByteArray {
+        const val PS = 2
+        val LABELS = listOf("Xbox controller", "Generic USB gamepad", "PlayStation controller")
+        // Names the PC sees for the HID service (and the phone name when "advertise" is on).
+        val NAMES = listOf("Virtual Xbox Controller", "Generic USB Gamepad", "Wireless Controller")
+
+        /** One Game Pad collection per slot, report ID = slot + 1, 16-bit axes of +-32256 (or DualShock 4 layout). */
+        fun descriptor(slots: List<Int>, one: Boolean, ps: Boolean = false): ByteArray {
             val b = ByteArrayOutputStream()
             fun w(vararg v: Int) = v.forEach { b.write(it) }
             for (s in slots) {
+                if (ps) {
+                    w(0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 0x85, s + 1)
+                    // LX LY RX RY, 8-bit
+                    w(0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02)
+                    // Hat switch (0-7, 8 = neutral)
+                    w(0x09, 0x39, 0x15, 0x00, 0x25, 0x07, 0x35, 0x00, 0x46, 0x3B, 0x01, 0x65, 0x14, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42)
+                    // 14 buttons plus 6 bits of padding
+                    w(0x65, 0x00, 0x05, 0x09, 0x19, 0x01, 0x29, 0x0E, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x0E, 0x81, 0x02)
+                    w(0x75, 0x06, 0x95, 0x01, 0x81, 0x01)
+                    // L2 / R2 analog
+                    w(0x05, 0x01, 0x09, 0x33, 0x09, 0x34, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02)
+                    w(0xC0)
+                    continue
+                }
                 w(0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 0x85, s + 1)
                 // 16 buttons
                 w(0x05, 0x09, 0x19, 0x01, 0x29, 0x10, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x10, 0x81, 0x02)

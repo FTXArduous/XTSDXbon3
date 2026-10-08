@@ -65,6 +65,22 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     private val one get() = prefs.getBoolean("one", true)
+    private val profile get() = prefs.getInt("profile", 0).coerceIn(0, Hid.LABELS.lastIndex)
+
+    // Renames the phone itself so the PC's "Add a device" list shows a controller name; the original is restored when off.
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun applyAdvertisedName() {
+        if (!btPermitted()) return
+        val ad = getSystemService(BluetoothManager::class.java)?.adapter ?: return
+        if (prefs.getBoolean("advName", false)) {
+            if (!prefs.contains("origName")) prefs.edit().putString("origName", ad.name ?: "").apply()
+            ad.setName(Hid.NAMES[profile])
+        } else if (prefs.contains("origName")) {
+            val orig = prefs.getString("origName", "") ?: ""
+            if (orig.isNotEmpty()) ad.setName(orig)
+            prefs.edit().remove("origName").apply()
+        }
+    }
     private fun padOn(i: Int) = prefs.getBoolean("pad$i", i == 0)
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun label(t: String) = TextView(this).apply { text = t; setPadding(0, dp(12), 0, 0) }
@@ -103,8 +119,23 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         pairedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(pairedBox)
 
+        root.addView(Button(this).apply {
+            fun refreshText() { text = "Bluetooth identity: ${Hid.LABELS[profile]} (tap to change)" }
+            refreshText()
+            setOnClickListener {
+                prefs.edit().putInt("profile", (profile + 1) % Hid.LABELS.size).apply()
+                refreshText()
+                rebuildRouting()
+                applyAdvertisedName()
+            }
+        })
         root.addView(Switch(this).apply {
-            text = "Layout: ON = Xbox One (Android standard), OFF = Xbox 360 (XInput style)"
+            text = "Show phone to the PC under the controller name (restored when off)"
+            isChecked = prefs.getBoolean("advName", false)
+            setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("advName", c).apply(); applyAdvertisedName() }
+        })
+        root.addView(Switch(this).apply {
+            text = "Layout: ON = Xbox One (Android standard), OFF = Xbox 360 (XInput style); not used for PlayStation"
             isChecked = one
             setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean("one", c).apply(); rebuildRouting() }
         })
@@ -217,11 +248,11 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
         for (id in newRoute.keys) stateById.getOrPut(id) { DevState() }
         for (l in slotStates) l.clear()
         for ((id, slot) in newRoute) slotStates[slot].add(stateById.getValue(id))
-        hid.configure((0 until 4).filter { padOn(it) }, one)
-        for (i in 0 until 4) if (padOn(i)) hid.send(i, Mapper.merge(slotStates[i]).bytes())
+        hid.configure((0 until 4).filter { padOn(it) }, one, profile)
+        for (i in 0 until 4) if (padOn(i)) hid.send(i, Mapper.merge(slotStates[i]))
     }
 
-    private fun flush(slot: Int) = hid.send(slot, Mapper.merge(slotStates[slot]).bytes())
+    private fun flush(slot: Int) = hid.send(slot, Mapper.merge(slotStates[slot]))
 
     private fun rawFor(d: InputDevice?, id: Int): Raw? {
         if (d == null) return null

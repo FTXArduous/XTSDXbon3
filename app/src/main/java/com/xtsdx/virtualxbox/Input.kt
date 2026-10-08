@@ -58,6 +58,26 @@ class Merged(val axes: IntArray, val buttons: Int, val hx: Int, val hy: Int) {
         return b
     }
 
+    /** DualShock 4 style body: LX LY RX RY (u8), hat + 14 buttons (3 bytes), L2 R2 (u8). */
+    fun ds4(): ByteArray {
+        fun stick(v: Int) = (v * 127 / MAX_POINTS + 128).coerceIn(0, 255)
+        fun trig(v: Int) = (v.coerceAtLeast(0) * 255 / MAX_POINTS).coerceIn(0, 255)
+        fun on(bit: Int) = (buttons shr bit) and 1
+        val h = HAT[(hy + 1) * 3 + (hx + 1)]
+        val hat = if (h == 0) 8 else h - 1
+        // Square, Cross, Circle, Triangle, L1, R1, L2, R2, Share, Options, L3, R3, PS
+        val btn = on(3) or (on(0) shl 1) or (on(1) shl 2) or (on(4) shl 3) or
+            (on(6) shl 4) or (on(7) shl 5) or
+            ((if (axes[4] > MAX_POINTS / 4) 1 else 0) shl 6) or ((if (axes[5] > MAX_POINTS / 4) 1 else 0) shl 7) or
+            (on(10) shl 8) or (on(11) shl 9) or (on(13) shl 10) or (on(14) shl 11) or (on(12) shl 12)
+        val word = hat or (btn shl 4)
+        return byteArrayOf(
+            stick(axes[0]).toByte(), stick(axes[1]).toByte(), stick(axes[2]).toByte(), stick(axes[3]).toByte(),
+            word.toByte(), (word shr 8).toByte(), (word shr 16).toByte(),
+            trig(axes[4]).toByte(), trig(axes[5]).toByte(),
+        )
+    }
+
     companion object {
         // Index (y+1)*3 + (x+1): 0 = neutral, 1..8 = N, NE, E, SE, S, SW, W, NW
         private val HAT = intArrayOf(8, 1, 2, 7, 0, 3, 6, 5, 4)
