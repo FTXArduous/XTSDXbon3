@@ -229,7 +229,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     override fun dispatchGenericMotionEvent(e: MotionEvent): Boolean {
-        if (e.source and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK && e.action == MotionEvent.ACTION_MOVE) {
+        if (e.device?.let(Mapper::isController) == true && e.action == MotionEvent.ACTION_MOVE) {
             val raw = rawFor(e.device, e.deviceId)
             if (raw != null) {
                 raw.update(e)
@@ -251,8 +251,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     }
 
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
-        val ctrl = InputDevice.SOURCE_GAMEPAD or InputDevice.SOURCE_JOYSTICK
-        val raw = if (e.source and ctrl != 0) rawFor(e.device, e.deviceId) else null
+        val raw = if (e.device?.let(Mapper::isController) == true) rawFor(e.device, e.deviceId) else null
         if (raw != null) {
             if (e.action == KeyEvent.ACTION_DOWN) raw.key(e.keyCode, true) else if (e.action == KeyEvent.ACTION_UP) raw.key(e.keyCode, false)
             if (showingMapping && page.learningOut >= 0 && e.deviceId == page.devId) {
@@ -290,7 +289,7 @@ class MainActivity : Activity(), InputManager.InputDeviceListener {
     private fun refreshDevices() {
         deviceBox.removeAllViews()
         val list = Config.devices()
-        if (list.isEmpty()) deviceBox.addView(TextView(this).apply { text = "No controllers detected. Plug one in via USB/OTG." })
+        if (list.isEmpty()) deviceBox.addView(TextView(this).apply { text = "No controllers detected. Connect one by Bluetooth or USB/OTG." })
         val info = StringBuilder()
         for (d in list) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }

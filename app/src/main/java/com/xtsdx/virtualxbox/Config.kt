@@ -25,8 +25,14 @@ object Config {
     }
 
     fun saveMap(p: SharedPreferences, key: String, m: Map<Int, Mapping>) {
-        p.edit().putString("map.$key", m.entries.joinToString(";") { "${it.key}:${it.value.encode()}" }).apply()
+        p.edit().putString("map.$key", encodeMap(m)).apply()
     }
+
+    fun commitMap(p: SharedPreferences, key: String, m: Map<Int, Mapping>): Boolean =
+        p.edit().putString("map.$key", encodeMap(m)).commit()
+
+    private fun encodeMap(m: Map<Int, Mapping>) =
+        m.entries.joinToString(";") { "${it.key}:${it.value.encode()}" }
 
     fun devices(): List<Dev> {
         val sorted = InputDevice.getDeviceIds().toList().mapNotNull { InputDevice.getDevice(it) }

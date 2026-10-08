@@ -53,6 +53,20 @@ class MappingPage(
         root.addView(spinner)
         root.addView(status)
         root.addView(Button(ctx).apply { text = "Cancel mapping"; setOnClickListener { cancel() } })
+        root.addView(Button(ctx).apply {
+            text = "Save mapping on this phone"
+            setOnClickListener {
+                if (devId < 0) {
+                    status.text = "Connect and select a controller before saving."
+                } else {
+                    status.text = if (Config.commitMap(prefs, typeKey, map)) {
+                        "Mapping saved on this phone for ${devs.firstOrNull { it.id == devId }?.label ?: "this controller"}."
+                    } else {
+                        "Could not save the mapping on this phone."
+                    }
+                }
+            }
+        })
         root.addView(live)
 
         for (out in Outputs.NAMES.indices) {
@@ -103,7 +117,7 @@ class MappingPage(
         val idx = devs.indexOfFirst { it.id == devId }.takeIf { it >= 0 } ?: 0
         if (devs.isEmpty()) {
             devId = -1
-            status.text = "No controllers detected. Plug one in."
+            status.text = "No controllers detected. Connect one by Bluetooth or USB/OTG."
             map.clear()
             updateRows()
         } else {
